@@ -2,12 +2,9 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Platform: x86-64](https://img.shields.io/badge/platform-x86--64-lightgrey.svg)
-![Built from scratch](https://img.shields.io/badge/bootloader%20%7C%20kernel%20%7C%20WM-from%20scratch-blue)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22313291.svg)](https://doi.org/10.5281/zenodo.22313291)
 
-An x86-64 operating system, written from scratch. No GRUB, no Limine, no
-tutorial framework; the bootloader, kernel, build system, and every line of
-code are original.
+An x86-64 operating system, written from scratch.
 
 ![NexusOS booted to its compositing desktop, with the shell running in a terminal window](docs/screenshot.png)
 
@@ -74,10 +71,10 @@ debugging).
 
 ### What's next
 
-In rough order, toward a usable GUI:
+Toward a usable GUI:
 
 1. Per-window keyboard focus routing (multiple terminals / text fields).
-2. More widgets — window resize, buttons, a few demo apps.
+2. More widgets — window resize, buttons, a few demonstration apps.
 3. Syscall interface (`syscall`/`sysret`) + user mode (ring 3, ELF loader),
    so apps can run outside the kernel.
 4. VFS layer over the existing FAT driver; write support.
@@ -88,8 +85,7 @@ In rough order, toward a usable GUI:
 Toolchain (installed automatically if you use the devcontainer):
 
 - `nasm`
-- `gcc` (any reasonably modern host gcc — we don't need a cross-compiler since
-  we target ELF64 and pass `-ffreestanding -m64 -mno-red-zone`)
+- `gcc`
 - `ld`, `objcopy` (binutils)
 - `mtools` (`mformat`, `mcopy`) — builds the FAT12 disk image without root
 - `qemu-system-x86_64`
