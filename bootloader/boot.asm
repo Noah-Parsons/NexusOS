@@ -54,8 +54,8 @@ start:
 
     ; ---------------- VBE linear-framebuffer mode ------------------
 %ifdef TEXT_ONLY
-    ; Build with -dTEXT_ONLY for firmware that HANGS inside the VBE int 0x10
-    ; calls under CSM (some real boards do). Skip VBE entirely; the kernel
+    ; Build with -dTEXT_ONLY for firmware that hangs inside the VBE int 0x10
+    ; calls under CSM. Skip VBE entirely; the kernel
     ; uses its text console.
     mov dword [0x9714], 0
 %else
@@ -93,7 +93,7 @@ start:
 %endif
 
     ; ---------------- Load kernel to 0x10000 (int 13h LBA) ----------
-    ; CHS reads hang on many real USB-boot BIOSes; the LBA extensions are
+    ; CHS reads hang on many USB-boot BIOSes; the LBA extensions are
     ; universally available on anything that can boot from USB.
     mov si, kernel_dap
     mov dl, [boot_drive]
@@ -148,11 +148,11 @@ protected_mode:
 
 boot_drive:   db 0
 %ifdef TEXT_ONLY
-msg_loading:  db "NexusOS text-mode boot...", 0x0D, 0x0A, 0
+msg_loading:  db "NexusOS text-mode boot", 0x0D, 0x0A, 0
 %else
-msg_loading:  db "Booting NexusOS...", 0x0D, 0x0A, 0
+msg_loading:  db "Booting NexusOS", 0x0D, 0x0A, 0
 %endif
-msg_disk_err: db "Disk read error!", 0
+msg_disk_err: db "Disk read error", 0
 
 ; Disk Address Packet for the int 13h LBA read of the kernel.
 align 4
@@ -178,3 +178,5 @@ gdt_descriptor:
 
 times 510 - ($ - $$) db 0
 dw 0xAA55
+
+; Consider adding UEFI capabilities
