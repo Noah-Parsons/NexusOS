@@ -1,0 +1,9 @@
+# Store source files with LF line endings in the repository, whatever the
+# editor or platform, so Windows checkouts do not turn every line into a diff.
+*.asm    text eol=lf
+*.c      text eol=lf
+*.h      text eol=lf
+*.ld     text eol=lf
+*.md     text eol=lf
+*.sh     text eol=lf
+Makefile text eol=lf

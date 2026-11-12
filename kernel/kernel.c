@@ -1,6 +1,8 @@
 /* kernel.c -- NexusOS top-level entry.
  *
  * Boot order:
+ *   0. framebuffer  (so "print" means something on a machine with no serial
+ *                    port and no VGA text buffer -- i.e. any UEFI laptop)
  *   1. console      (so everything else can print)
  *   2. idt          (install handlers BEFORE enabling interrupts)
  *   3. pic          (remap IRQs to 0x20..0x2F)
@@ -195,6 +197,15 @@ static void shell(void) {
 
 void kernel_main(void) {
     console_init();
+
+    /* Graphics before anything else. fb_init needs no page tables of its own
+     * -- the boot identity map (the firmware's under UEFI, kernel_entry_bios.asm's
+     * under BIOS) is still live here and covers the LFB -- so bringing it up
+     * first costs nothing and means every line below actually reaches a screen.
+     * Without it the whole boot is invisible until wm_init on the last line,
+     * and any failure in between is indistinguishable from a hang. */
+    if (fb_init()) fb_early_init();
+
     banner();
     console_puts("[boot] console ready\n");
 
@@ -219,7 +230,7 @@ void kernel_main(void) {
 
     kmalloc_init();
 
-    if (fb_init()) {
+    if (fb_active()) {
         const framebuffer_t *f = fb_get();
         console_puts("[fb] ");
         console_put_dec(f->width); console_putc('x');

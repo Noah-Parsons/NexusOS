@@ -204,13 +204,24 @@ static void close_window(int id) {
 
 /* ---- taskbar ------------------------------------------------------------ */
 
+/* Uptime as H:MM:SS. The PIT runs at 100 Hz (pit_init(100) in kernel.c).
+ * Hours are unbounded, so the clock no longer wraps; the previous MM:SS
+ * format wrapped every 100 minutes. out must hold at least 24 bytes. */
 static void format_uptime(char *out) {
-    uint64_t s = pit_ticks() / 100;
-    uint64_t mm = (s / 60) % 100, ss = s % 60;
-    out[0] = '0' + (char)(mm / 10); out[1] = '0' + (char)(mm % 10);
-    out[2] = ':';
-    out[3] = '0' + (char)(ss / 10); out[4] = '0' + (char)(ss % 10);
-    out[5] = '\0';
+    uint64_t s  = pit_ticks() / 100;
+    uint64_t hh = s / 3600, mm = (s / 60) % 60, ss = s % 60;
+
+    char digits[20];
+    int n = 0;
+    do { digits[n++] = '0' + (char)(hh % 10); hh /= 10; } while (hh);
+
+    int i = 0;
+    while (n) out[i++] = digits[--n];
+    out[i++] = ':';
+    out[i++] = '0' + (char)(mm / 10); out[i++] = '0' + (char)(mm % 10);
+    out[i++] = ':';
+    out[i++] = '0' + (char)(ss / 10); out[i++] = '0' + (char)(ss % 10);
+    out[i]   = '\0';
 }
 
 static void draw_taskbar(int fid) {
@@ -229,9 +240,11 @@ static void draw_taskbar(int fid) {
         bx += TB_BTN_W + TB_GAP;
     }
 
-    char clk[8];
+    char clk[24];
     format_uptime(clk);
-    draw_text_clip(W - 90, ty + (TASKBAR_H - 16) / 2, clk, COL_TITLE_TXT, W - 4);
+    /* Right-aligned: the string grows as uptime passes 9 and 99 hours. */
+    int cw = (int)strlen(clk) * 8 * TXT_SCALE;
+    draw_text_clip(W - 6 - cw, ty + (TASKBAR_H - 16) / 2, clk, COL_TITLE_TXT, W - 4);
 }
 
 static int taskbar_at(int mx, int my) {

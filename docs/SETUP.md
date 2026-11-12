@@ -30,10 +30,14 @@ make all
 ```
 
 This will:
-1. Assemble the bootloader
-2. Compile and link the kernel
-3. Combine them into `build/os.bin`
+1. Assemble the BIOS bootloader and link the kernel with the BIOS entry stub
+2. Combine them into `build/os.bin`
+3. Build the UEFI loader (`build/BOOTX64.EFI`) and the UEFI kernel, and put
+   both on a FAT32 EFI System Partition image, `build/esp.img`
 4. Build the FAT12 disk image `build/fat.img` (with a couple of sample files)
+
+`make bios` or `make uefi` builds just one path. The UEFI loader needs the
+mingw-w64 cross-compiler (`gcc-mingw-w64-x86-64`).
 
 ## Running NexusOS
 
@@ -47,7 +51,9 @@ disk. `make run` is serial-only (`Ctrl-A x` to exit); `make rungui` opens a
 window with the graphical desktop.
 
 Other targets: `make text` (text-only image for real hardware whose firmware
-hangs on VBE), `make debug` (boot paused under GDB), `make clean`.
+hangs on VBE), `make debug` (boot paused under GDB), `make clean`. The same
+run targets exist for UEFI under OVMF: `make run-uefi`, `make rungui-uefi`,
+`make debug-uefi`, plus `make usb` for a flashable GPT image.
 
 To capture the framebuffer to a PNG (handy on headless/WSL setups):
 

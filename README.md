@@ -19,17 +19,30 @@ per-window buttons and an uptime clock.*
 
 ## Status
 
-Boots on QEMU into a graphical desktop: a VESA linear framebuffer driven by a
-compositing window manager, with draggable windows and a mouse cursor. The
-interactive shell runs in a terminal window (and is mirrored over serial for
-debugging).
+Boots by **legacy BIOS** or **UEFI**, from the same kernel, into a graphical
+desktop: a linear framebuffer driven by a compositing window manager, with
+draggable windows and a mouse cursor. The interactive shell runs in a terminal
+window (and is mirrored over serial for debugging). Both paths boot to the
+desktop under QEMU (SeaBIOS and OVMF); see
+[Running on real hardware](#running-on-real-hardware) for physical machines.
 
 ### What works
 
-- **Two-stage boot.** Custom 512-byte MBR bootloader transitions real → protected →
-  long mode, collects the BIOS E820 memory map, and loads the kernel.
+- **Two boot paths, one kernel.** No GRUB, gnu-efi, or EDK2 on either.
+  - *Legacy BIOS* (the path the book describes): a 512-byte MBR
+    (`bootloader/boot.asm`) collects the E820 map, sets a VBE linear-framebuffer
+    mode, loads the kernel with int 13h LBA reads, and enters protected mode;
+    `kernel/kernel_entry_bios.asm` builds boot page tables and switches to long
+    mode.
+  - *UEFI*: a custom PE32+ application (`bootloader/boot.c`) opens the Graphics
+    Output Protocol, loads the kernel from the FAT EFI System Partition,
+    snapshots the firmware memory map into the same E820 format, exits boot
+    services, and jumps to the long-mode kernel (`kernel/kernel_entry.asm`). It
+    uses a self-contained subset of the UEFI interfaces in `bootloader/efi.h`.
+  - Both loaders leave the same hand-off in low memory (E820 table at `0x9000`,
+    framebuffer descriptor at `0x9700`), so only the entry stub differs.
 - **Long-mode kernel** linked at `0x10000`, BSS zeroed at entry.
-- **Output** on a VESA linear framebuffer (graphical text console), with the
+- **Output** on the linear framebuffer (graphical text console), with the
   legacy VGA text buffer (`0xB8000`) and serial (COM1, 115200 8N1) mirrored
   alongside for early boot and debugging.
 - **Interrupts.** Full 256-entry IDT, all CPU exception vectors handled,
@@ -52,10 +65,11 @@ debugging).
   built on the scheduler's BLOCKED state with FIFO-on-release hand-off.
 - **Storage.** Interrupt-driven PIO ATA driver (primary slave) and a
   read-only FAT12 filesystem (`ls`, `cat`).
-- **Graphics.** Bootloader sets a VESA linear-framebuffer mode (1024x768,
-  falling back to text mode if unavailable); the kernel maps the framebuffer.
-  `kernel/gfx.c` provides surface-based drawing (pixel/fill/blit/text) that
-  targets either the screen or an off-screen buffer.
+- **Graphics.** The bootloader selects a linear-framebuffer mode — VBE mode
+  0x118 (1024x768) under BIOS; under UEFI, GOP at 1024x768x32 if offered,
+  otherwise whatever the firmware left active — and falls back to text/serial
+  if neither is available. The kernel maps the framebuffer. `kernel/gfx.c` provides surface-based drawing
+  (pixel/fill/blit/text) that targets either the screen or an off-screen buffer.
 - **Mouse.** PS/2 mouse on IRQ12 — 3-byte packet parsing, position clamped to
   the screen, button state.
 - **Window manager.** A compositing WM (`kernel/wm.c`) with an off-screen back
@@ -86,9 +100,14 @@ Toolchain (installed automatically if you use the devcontainer):
 
 - `nasm`
 - `gcc`
+- `x86_64-w64-mingw32-gcc` (`gcc-mingw-w64-x86-64`) — UEFI loader only; emits
+  the PE32+ binary UEFI needs, with no gnu-efi or EDK2 dependency
 - `ld`, `objcopy` (binutils)
-- `mtools` (`mformat`, `mcopy`) — builds the FAT12 disk image without root
+- `mtools` (`mformat`, `mmd`, `mcopy`) — builds the FAT images without root
+- `ovmf` — UEFI firmware for QEMU, for the `*-uefi` targets (expects
+  `/usr/share/ovmf/OVMF.fd`; override with `make run-uefi OVMF=/path/to/OVMF.fd`)
 - `qemu-system-x86_64`
+- `gdisk` (`sgdisk`) — only for `make usb`
 - `gdb` (optional, for `make debug`)
 
 ## Quick start
@@ -105,12 +124,14 @@ make run
 ### Local
 
 ```sh
-sudo apt install nasm gcc binutils mtools qemu-system-x86 gdb
-make rungui   # GUI in a window; use `make run` for headless serial only
+sudo apt install nasm gcc gcc-mingw-w64-x86-64 binutils mtools ovmf \
+                 qemu-system-x86 gdisk gdb
+make rungui        # BIOS boot, GUI in a window; `make run` for headless serial only
+make rungui-uefi   # the same under UEFI (OVMF); `make run-uefi` for headless
 ```
 
 `make rungui` opens a QEMU window with the graphical desktop; `make run` is
-serial-only (no window). Either way the boot log goes to serial:
+serial-only (no window). Either way the kernel's boot log goes to serial:
 
 ```
 ==========================================
@@ -124,7 +145,8 @@ serial-only (no window). Either way the boot log goes to serial:
 [pmm] total = XXX MiB, free = XXX MiB
 [vmm] mapped identity ...
 [heap] base=0x200000000 ...
-[fb] 1024x768x24 @ 0xFD000000 pitch=3072
+[fb] 1024x768x32 @ 0x... pitch=4096
+[test] kmalloc -> 0x... 0x... 0x...
 NexusOS ready. Type 'help' for commands.
 [sched] init, idle task id=0
 ...
@@ -132,6 +154,11 @@ NexusOS ready. Type 'help' for commands.
 [fat] mounted (...)
 nexus>
 ```
+
+Under UEFI the loader first prints three lines of its own (`NexusOS UEFI
+bootloader` and two `[boot]` lines) to the firmware console; under BIOS,
+`boot.asm` prints `Booting NexusOS` to the screen. Everything from the banner
+down is the kernel, identical on both paths.
 
 `Ctrl-A x` exits QEMU (serial/`-display none` runs); close the window
 otherwise.
@@ -148,21 +175,37 @@ type into the terminal. `Ctrl-Alt-G` releases the mouse grab.
 
 ### Build targets
 
-| Target        | What it does                                                       |
-| ------------- | ------------------------------------------------------------------ |
-| `make all`    | Build the GUI image (`build/os.bin`)                               |
-| `make run`    | Build + boot headless (serial, no window)                          |
-| `make rungui` | Build + boot in a GUI window (needs a display)                     |
-| `make text`   | Build a **text-only** image — skips VBE, for real hardware whose firmware hangs on the VBE call |
-| `make debug`  | Boot paused and attach GDB                                         |
-| `make clean`  | Remove `build/`                                                    |
+| Target             | What it does                                                        |
+| ------------------ | ------------------------------------------------------------------- |
+| `make all`         | Build both boot images + the FAT12 test disk                        |
+| `make bios`        | Build the BIOS image (`build/os.bin`) + the FAT12 test disk         |
+| `make uefi`        | Build the UEFI ESP image (`build/esp.img`) + the FAT12 test disk    |
+| `make run`         | BIOS: build + boot headless (serial, no window)                     |
+| `make rungui`      | BIOS: build + boot in a GUI window (needs a display)                |
+| `make debug`       | BIOS: boot paused and attach GDB                                    |
+| `make text`        | BIOS: text-only image that skips VBE (for firmware that hangs on it) |
+| `make run-uefi`    | UEFI: build + boot headless under OVMF                              |
+| `make rungui-uefi` | UEFI: build + boot in a GUI window under OVMF                       |
+| `make debug-uefi`  | UEFI: boot paused and attach GDB                                    |
+| `make usb`         | UEFI: build `build/esp_gpt.img` — GPT-wrapped ESP for a USB stick   |
+| `make clean`       | Remove `build/`                                                     |
 
 ## Running on real hardware
 
-NexusOS boots natively (BIOS/legacy) from a USB stick on a real x86-64 PC — no
-emulator. The short version: write `build/os.bin` raw to a USB stick (DD mode),
-enable **Legacy/CSM** and **USB Legacy Support** in firmware, and boot from it.
-Use `make text` if the graphical mode hangs on your board.
+NexusOS boots from a USB stick on a real x86-64 machine — no emulator — by
+either path:
+
+- **UEFI:** `make usb`, write `build/esp_gpt.img` raw to a stick (DD mode),
+  disable **Secure Boot**, and boot the stick as a UEFI device.
+- **Legacy BIOS:** `make bios`, write `build/os.bin` raw to a stick, enable
+  **CSM/Legacy** and **USB Legacy Support**, and boot the stick's non-UEFI
+  entry. If the firmware hangs setting the graphics mode, use `make text`.
+
+Two caveats are structural rather than bugs. The kernel speaks PS/2 (i8042)
+only, so under UEFI a USB keyboard stops working the moment `ExitBootServices`
+runs (under CSM the firmware's PS/2 emulation keeps it alive). And the storage
+driver targets a legacy IDE primary slave, so `ls`/`cat` won't find a
+SATA/AHCI/NVMe disk.
 
 See **[docs/HARDWARE.md](docs/HARDWARE.md)** for the full walkthrough — flashing,
 firmware settings, what works vs. the caveats, and a troubleshooting table.
@@ -170,21 +213,29 @@ firmware settings, what works vs. the caveats, and a troubleshooting table.
 ### Debugging
 
 ```sh
-make debug
+make debug        # BIOS
+make debug-uefi   # UEFI
 ```
 
-Launches QEMU paused (`-s -S`) and attaches GDB with the kernel ELF loaded.
+Launches QEMU paused (`-s -S`) and attaches GDB with the matching kernel ELF
+loaded.
 A breakpoint is set on `kernel_main`. `continue` to start.
 
 ## Graphics
 
-The bootloader asks the BIOS (VBE) for a 1024x768 linear-framebuffer mode
-while still in real mode, and leaves a small descriptor — framebuffer address,
-pitch, dimensions, and bpp — at physical `0x9700` for the kernel. If VBE fails,
-it sets a valid flag to 0 and the kernel stays on the text/serial console.
+Under BIOS, `boot.asm` asks the video BIOS for VBE mode 0x118 (1024x768) with
+the linear-framebuffer bit set. Under UEFI, `boot.c` opens the Graphics Output
+Protocol and walks its mode list for 1024x768 with a 32-bit BGR/RGB layout
+(keeping the firmware's current mode if there is no match). Either loader then
+leaves a small descriptor at physical `0x9700` for the kernel: a 64-bit
+framebuffer base followed by pitch, width, height, bpp, and a valid flag. The
+base is 64-bit because real UEFI can park the framebuffer above 4 GiB (VBE
+bases are 32-bit, so `boot.asm` writes a zero high dword). If no mode could be
+set, the valid flag is 0 and the kernel stays on the text/serial console.
 
-In the kernel, `kernel/fb.c` maps the framebuffer (it lives above identity-
-mapped RAM, so it is mapped page-by-page). `kernel/gfx.c` draws onto any
+In the kernel, `kernel/fb.c` reads the descriptor and `kernel/vmm.c` maps the
+framebuffer explicitly when it builds the kernel's page tables, since it can lie
+outside identity-mapped RAM. `kernel/gfx.c` draws onto any
 `surface_t` — the screen or an off-screen buffer — with pixel/fill/blit and
 scaled 8x8 text (`kernel/font8x8.h`).
 
@@ -222,12 +273,17 @@ primitives, the storage stack, and the gfx/compositor design — see
 ├── tools/
 │   └── screenshot.sh     # boot headless, capture the framebuffer to a PNG
 ├── docs/
-│   └── SETUP.md          # toolchain + build/run notes
+│   ├── SETUP.md          # toolchain + build/run notes
+│   ├── HARDWARE.md       # flashing, firmware settings, real-hardware caveats
+│   └── ARCHITECTURE.md   # boot flow, memory model, scheduler, compositor
 ├── bootloader/
-│   └── boot.asm          # MBR: E820, VBE mode set, GDT, PM transition
+│   ├── boot.asm          # BIOS MBR: E820, VBE, int 13h LBA load, protected mode
+│   ├── boot.c            # UEFI app: GOP, load kernel.bin, E820 snapshot, handoff
+│   └── efi.h             # self-contained subset of the UEFI interfaces used
 └── kernel/
     ├── linker.ld         # loads at 0x10000, exports __bss_start/_end, __kernel_end
-    ├── kernel_entry.asm  # long-mode trampoline, BSS zero, call kernel_main
+    ├── kernel_entry.asm  # UEFI entry: GDT reload, BSS zero, call kernel_main
+    ├── kernel_entry_bios.asm # BIOS entry: boot page tables, long mode, BSS zero
     ├── kernel.c          # boot sequence, shell
     │
     ├── types.h           # u8/u16/u32/u64, bool, attribute macros
@@ -269,17 +325,18 @@ Physical:
 
 | Range                    | Contents                                    |
 | ------------------------ | ------------------------------------------- |
-| `0x00000000–0x0009FFFF`  | Low memory (IVT, BDA, etc.) — reserved      |
-| `0x00007C00`             | Bootloader entry (MBR)                      |
-| `0x00009000`+            | E820 entry count + 24-byte entries          |
+| `0x00000000–0x0009FFFF`  | Low memory — reserved                       |
+| `0x00009000`             | E820 entry count (u32)                      |
+| `0x00009008`+            | E820 entries, 24 bytes each (max 64)        |
 | `0x00009700`             | Framebuffer descriptor handed to the kernel |
-| `0x00009800`             | VBE mode-info scratch block                 |
 | `0x000B8000`             | Legacy VGA text framebuffer                 |
 | `0x00010000`             | Kernel `_start`                             |
 | `0x00010000–__kernel_end`| Kernel image                                |
 | `__kernel_end`+          | PMM bitmap                                  |
+| `0x00070000–0x00075FFF`  | Boot page tables (BIOS path only)           |
+| `0x00090000`             | Boot stack top (set in the entry stub)      |
 | Above                    | Free frames                                 |
-| `~0xFD000000`            | VESA linear framebuffer (MMIO, see boot.asm)|
+| firmware-chosen          | Linear framebuffer (MMIO; base reported by the loader — VBE below 4 GiB, GOP possibly above) |
 
 Virtual (after `vmm_init`):
 
@@ -287,7 +344,7 @@ Virtual (after `vmm_init`):
 | ------------------------ | ------------------------------------------- |
 | `0x0000000000000000`+    | Identity map of physical RAM (2 MiB pages)  |
 | `0x0000000200000000`+    | Kernel heap (4 KiB pages, demand-grown)     |
-| `~0xFD000000`            | Framebuffer, identity-mapped (4 KiB pages)  |
+| framebuffer base         | Framebuffer, identity-mapped (2 MiB pages)  |
 
 ## Shell commands
 

@@ -1,7 +1,7 @@
 # NexusOS architecture
 
-A tour of how NexusOS is put together, from the first instruction the BIOS runs
-to the compositing window manager. Everything here is original — no GRUB,
+A tour of how NexusOS is put together, from the first instruction the firmware
+runs to the compositing window manager. Everything here is original — no GRUB,
 Limine, or tutorial framework.
 
 ## Boot flow
@@ -13,20 +13,35 @@ BIOS ──> MBR (bootloader/boot.asm, 512 bytes, real mode)
          ├─ load kernel to 0x10000 (int 13h LBA, AH=42h)
          ├─ enable A20, load GDT, enter 32-bit protected mode
          └─ far-jump to 0x10000
-       ──> kernel_entry.asm (32-bit -> 64-bit)
-           ├─ build temporary 2 MiB identity page tables at 0x70000
+       ──> kernel_entry_bios.asm (32-bit -> 64-bit)
+           ├─ build temporary identity page tables at 0x70000 (0..4 GiB, 2 MiB pages)
            ├─ enable PAE + long mode (EFER.LME) + paging
            ├─ zero .bss
            └─ call kernel_main()
+
+UEFI ──> BOOTX64.EFI (bootloader/boot.c, PE32+, long mode)
+         ├─ open GOP, pick 1024x768x32 if offered    -> descriptor at 0x9700
+         ├─ read \kernel.bin from the ESP, copy to 0x10000
+         ├─ GetMemoryMap → translate to E820        -> 0x9000 / 0x9008
+         ├─ ExitBootServices
+         └─ jump to 0x10000
+       ──> kernel_entry.asm (already 64-bit)
+           ├─ load the kernel's GDT, reload segment registers and CS
+           ├─ zero .bss
+           └─ call kernel_main()
+
+Both paths then run the same code:
        ──> kernel.c: kernel_main()
            console → idt → pic → pit → keyboard → sti
            → pmm → vmm → kmalloc → scheduler + demo tasks
            → ata/fat → mouse → wm (compositor) → shell()
 ```
 
-The MBR does the bare minimum in real mode (where BIOS services are still
-available), because once we leave real mode the BIOS is gone. The kernel entry
-stub handles the protected→long mode transition; the real page tables are built
+On the BIOS path the MBR does the bare minimum in real mode (where BIOS services
+are still available), because once we leave real mode the BIOS is gone, and the
+entry stub handles the protected→long mode transition. On the UEFI path the
+firmware has already done that climb, so the loader's job is to translate what
+UEFI reports into the same hand-off the MBR writes. Either way, the real page tables are built
 later by the VMM once the physical allocator exists.
 
 ## Memory model
@@ -131,9 +146,12 @@ falls back to the VGA text buffer and the WM is skipped.
 ## Code map
 
 ```
-bootloader/boot.asm   MBR: E820, VBE, LBA kernel load, protected mode
+bootloader/boot.asm   BIOS MBR: E820, VBE, LBA kernel load, protected mode
+bootloader/boot.c     UEFI loader: GOP, kernel load, E820 translation, hand-off
+bootloader/efi.h      the subset of UEFI interfaces boot.c uses
 kernel/
-  kernel_entry.asm    32→64-bit trampoline, paging, BSS, call kernel_main
+  kernel_entry_bios.asm  BIOS: 32→64-bit trampoline, paging, BSS, call kernel_main
+  kernel_entry.asm    UEFI: GDT reload, BSS, call kernel_main
   kernel.c            boot sequence + shell
   types.h io.h        primitive types; port I/O, control registers
   string.{c,h}        mem*/strlen + numeric formatters

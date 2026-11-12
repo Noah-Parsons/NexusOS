@@ -2,6 +2,7 @@
  * graphics mode is up -- the framebuffer text console. */
 #include "console.h"
 #include "fbcon.h"
+#include "fb.h"
 #include "io.h"
 #include "string.h"
 
@@ -24,7 +25,13 @@ static void serial_init(void) {
 }
 
 static void serial_putc(char c) {
-    while (!(inb(COM1 + 5) & 0x20)) { }
+    /* Bounded wait. A machine with no UART decoding 0x3F8 -- every Chromebook,
+     * and most UEFI laptops -- can leave the line-status register reading 0x00,
+     * in which case an unbounded spin here would hang the kernel on the very
+     * first character it ever printed, before any other subsystem came up.
+     * Dropping the byte is the right trade: there is nobody listening anyway. */
+    for (int i = 0; i < 100000; i++)
+        if (inb(COM1 + 5) & 0x20) break;
     outb(COM1, (uint8_t)c);
 }
 
@@ -81,7 +88,11 @@ void console_putc(char c) {
     if (c == '\n') serial_putc('\r');
     serial_putc(c);
     vga_putc(c);
-    if (fbcon_ready()) fbcon_putc(c);
+    /* fbcon once the window manager is compositing it; before that, straight
+     * to the framebuffer so early boot is visible on a machine whose only
+     * working output device is the panel. */
+    if (fbcon_ready())          fbcon_putc(c);
+    else if (fb_early_active()) fb_early_putc(c);
 }
 
 void console_puts(const char *s) {

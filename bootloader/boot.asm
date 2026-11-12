@@ -57,7 +57,7 @@ start:
     ; Build with -dTEXT_ONLY for firmware that hangs inside the VBE int 0x10
     ; calls under CSM. Skip VBE entirely; the kernel
     ; uses its text console.
-    mov dword [0x9714], 0
+    mov dword [0x9718], 0
 %else
     ; Get mode info for 1024x768 (VBE 0x118), then set it with the LFB bit.
     ; On success, leave a descriptor at 0x9700 for the kernel; on failure,
@@ -75,20 +75,26 @@ start:
     int 0x10
     cmp ax, 0x004F
     jne .vbe_fail
+    ; Descriptor layout, shared with the UEFI loader (boot.c) and read by
+    ; kernel/fb.c and kernel/vmm.c:
+    ;   0x9700 u64 LFB base (VBE gives 32 bits; the high dword is 0)
+    ;   0x9708 u32 pitch, 0x970C width, 0x9710 height, 0x9714 bpp,
+    ;   0x9718 u32 valid
     mov eax, [0x9800 + 40]     ; PhysBasePtr
     mov [0x9700], eax
+    mov dword [0x9704], 0
     movzx eax, word [0x9800 + 16]   ; BytesPerScanLine
-    mov [0x9704], eax
-    movzx eax, word [0x9800 + 18]   ; XResolution
     mov [0x9708], eax
-    movzx eax, word [0x9800 + 20]   ; YResolution
+    movzx eax, word [0x9800 + 18]   ; XResolution
     mov [0x970C], eax
-    movzx eax, byte [0x9800 + 25]   ; BitsPerPixel
+    movzx eax, word [0x9800 + 20]   ; YResolution
     mov [0x9710], eax
-    mov dword [0x9714], 1
+    movzx eax, byte [0x9800 + 25]   ; BitsPerPixel
+    mov [0x9714], eax
+    mov dword [0x9718], 1
     jmp .vbe_done
 .vbe_fail:
-    mov dword [0x9714], 0
+    mov dword [0x9718], 0
 .vbe_done:
 %endif
 
